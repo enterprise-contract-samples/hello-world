@@ -1,0 +1,81 @@
+---
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  IMAGE_REGISTRY: quay.io
+  IMAGE_REPO: enterprise-contract-samples/hello-world
+  # TODO: Also tag with a commit
+  IMAGE_TAGS: latest
+
+jobs:
+  build:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Needed for signing the container image with GitHub OIDC Token
+      id-token: write
+
+    outputs:
+      image:  ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_REPO }}
+      digest: ${{ steps.push-image.outputs.digest }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@main
+
+    - name: Log in to Red Hat Registry
+      uses: redhat-actions/podman-login@v1
+      with:
+        registry: registry.redhat.io
+        username: ${{ secrets.REGISTRY_REDHAT_IO_USER }}
+        password: ${{ secrets.REGISTRY_REDHAT_IO_PASSWORD }}
+
+    - name: Log in to quay.io
+      uses: redhat-actions/podman-login@v1
+      with:
+        username: ${{ vars.REGISTRY_QUAY_IO_USER }}
+        password: ${{ secrets.REGISTRY_QUAY_IO_PASSWORD }}
+        registry: quay.io
+
+    - name: Buildah Action
+      id: build-image
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: ${{ env.IMAGE_REPO }}
+        tags: ${{ env.IMAGE_TAGS }}
+        dockerfiles: ./Dockerfile
+
+    - name: Push to quay.io
+      id: push-image
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        registry: ${{ env.IMAGE_REGISTRY }}
+        image: ${{ steps.build-image.outputs.image }}
+        tags: ${{ steps.build-image.outputs.tags }}
+
+    - name: Sign image with GitHub OIDC Token
+      run: cosign sign --yes ${IMAGE_REGISTRY}/${IMAGE_REPO}@${DIGEST}
+      env:
+        DIGEST: ${{ steps.push-image.outputs.digest }}
+
+  provenance:
+    needs: [build]
+    permissions:
+      actions: read # for detecting the Github Actions environment.
+      id-token: write # for creating OIDC tokens for signing.
+      packages: write # for uploading attestations.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v1.10.0
+    with:
+      image: ${{ needs.build.outputs.image }}
+      digest: ${{ needs.build.outputs.digest }}
+      registry-username: ${{ vars.REGISTRY_QUAY_IO_USER }}
+    secrets:
+      registry-password: ${{ secrets.REGISTRY_QUAY_IO_PASSWORD }}
