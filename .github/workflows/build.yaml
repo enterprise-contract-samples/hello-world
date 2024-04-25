@@ -8,12 +8,10 @@ on:
 env:
   IMAGE_REGISTRY: quay.io
   IMAGE_REPO: enterprise-contract-samples/hello-world
-  # TODO: Also tag with a commit
-  IMAGE_TAGS: latest ${{ github.sha }} ${{ github.ref_name }}
+  IMAGE_TAGS: "${{ github.sha }} ${{ github.ref_name }}"
 
 jobs:
   build:
-    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
 
     permissions:
@@ -44,7 +42,7 @@ jobs:
         password: ${{ secrets.REGISTRY_QUAY_IO_PASSWORD }}
         registry: quay.io
 
-    - name: Buildah Action
+    - name: Build image
       id: build-image
       uses: redhat-actions/buildah-build@v2
       with:
@@ -52,13 +50,20 @@ jobs:
         tags: ${{ env.IMAGE_TAGS }}
         dockerfiles: ./Dockerfile
 
-    - name: Push to quay.io
+    - name: Push image to registry
       id: push-image
       uses: redhat-actions/push-to-registry@v2
       with:
         registry: ${{ env.IMAGE_REGISTRY }}
         image: ${{ steps.build-image.outputs.image }}
         tags: ${{ steps.build-image.outputs.tags }}
+
+    - name: Tag image with latest tag
+      if: ${{ github.ref == 'refs/heads/main' }}
+      run: |
+        skopeo copy --all docker://${IMAGE_REGISTRY}/${IMAGE_REPO}@${DIGEST} docker://${IMAGE_REGISTRY}/${IMAGE_REPO}:latest
+      env:
+        DIGEST: ${{ steps.push-image.outputs.digest }}
 
     - name: Sign image with GitHub OIDC Token
       run: cosign sign --yes ${IMAGE_REGISTRY}/${IMAGE_REPO}@${DIGEST}
@@ -71,7 +76,6 @@ jobs:
       actions: read # for detecting the Github Actions environment.
       id-token: write # for creating OIDC tokens for signing.
       packages: write # for uploading attestations.
-    if: ${{ github.ref == 'refs/heads/main' }}
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml@v1.10.0
     with:
       image: ${{ needs.build.outputs.image }}
